@@ -119,7 +119,7 @@ KNOWN_LED_STATE = {}
 def _set_bool_led(led_id: int, sim_attr: str, fsmga: FSMGADevice, aircraft_state):
     """Helper for setting simple LEDs based on boolean properties."""
     known_state = KNOWN_LED_STATE.get(led_id)
-    sim_state = aircraft_state.get(sim_attr)
+    sim_state = aircraft_state.get(sim_attr) or 0
 
     if sim_state > 0 and not known_state:
         fsmga.set_led_on(led_id)
@@ -150,15 +150,16 @@ def led_update_nav(led_id: int, fsmga: FSMGADevice, aircraft_state):
 def led_update_apr(led_id: int, fsmga: FSMGADevice, aircraft_state):
     known_state = KNOWN_LED_STATE.get(led_id)
 
-    apr_armed = aircraft_state.get("AUTOPILOT_APPROACH_ARM") > 0
-    apr_active = aircraft_state.get("AUTOPILOT_APPROACH_ACTIVE") > 0
-    apr_captured = aircraft_state.get("AUTOPILOT_APPROACH_CAPTURED") > 0
+    apr_armed = (aircraft_state.get("AUTOPILOT_APPROACH_ARM") or 0) > 0
+    apr_active = (aircraft_state.get("AUTOPILOT_APPROACH_ACTIVE") or 0) > 0
+    apr_captured = (aircraft_state.get("AUTOPILOT_APPROACH_CAPTURED") or 0) > 0
+    apr_hold = (aircraft_state.get("AUTOPILOT_APPROACH_HOLD") or 0) > 0
 
-    gs_armed = aircraft_state.get("AUTOPILOT_GLIDESLOPE_ARM") > 0
-    gs_active = aircraft_state.get("AUTOPILOT_GLIDESLOPE_ACTIVE") > 0
+    gs_armed = (aircraft_state.get("AUTOPILOT_GLIDESLOPE_ARM") or 0) > 0
+    gs_active = (aircraft_state.get("AUTOPILOT_GLIDESLOPE_ACTIVE") or 0) > 0
 
     # Should the LED be lit?
-    if (apr_active or apr_captured or gs_active) and known_state != "on":
+    if (apr_active or apr_captured or gs_active or apr_hold) and known_state != "on":
         fsmga.set_led_on(led_id)
         KNOWN_LED_STATE[led_id] = "on"
         return
@@ -170,7 +171,10 @@ def led_update_apr(led_id: int, fsmga: FSMGADevice, aircraft_state):
         return
 
     # Turn off the LED
-    if known_state != "off":
+    if (
+        not any([apr_armed, apr_active, apr_captured, apr_hold, gs_active, gs_armed])
+        and known_state != "off"
+    ):
         fsmga.set_led_off(led_id)
         KNOWN_LED_STATE[led_id] = "off"
 
@@ -179,10 +183,10 @@ def led_update_apr(led_id: int, fsmga: FSMGADevice, aircraft_state):
 
 
 def led_update_alt(led_id: int, fsmga: FSMGADevice, aircraft_state):
-    known_state = KNOWN_LED_STATE.get(led_id)
+    known_state = KNOWN_LED_STATE.get(led_id, "off") or "off"
 
-    armed = aircraft_state.get("AUTOPILOT_ALTITUDE_ARM") > 0
-    locked = aircraft_state.get("AUTOPILOT_ALTITUDE_LOCK") > 0
+    armed = (aircraft_state.get("AUTOPILOT_ALTITUDE_ARM") or 0) > 0
+    locked = (aircraft_state.get("AUTOPILOT_ALTITUDE_LOCK") or 0) > 0
 
     if locked and known_state != "locked":
         fsmga.set_led_on(led_id)
@@ -194,7 +198,7 @@ def led_update_alt(led_id: int, fsmga: FSMGADevice, aircraft_state):
         KNOWN_LED_STATE[led_id] = "armed"
         return
 
-    if known_state != "off":
+    if not locked and not armed and known_state != "off":
         fsmga.set_led_off(led_id)
         KNOWN_LED_STATE[led_id] = "off"
 
@@ -242,28 +246,13 @@ def led_update_loop(fsmga: FSMGADevice, aircraft_state: AircraftRequests):
         FSMGALED.VNAV: led_update_noop,  # Missing simconnect, maybe use mobiflight?
         FSMGALED.IAS: led_update_ias_as_flc,
         FSMGALED.AP: led_update_ap,
-        FSMGALED.FD: led_update_noop,
-        FSMGALED.YD: led_update_noop,
-        FSMGALED.VS: led_update_noop,
+        FSMGALED.FD: led_update_fd,
+        FSMGALED.YD: led_update_yd,
+        FSMGALED.VS: led_update_vs,
     }
 
     for led_id, update_func in LED_UPDATER_MAP.items():
         update_func(int(led_id), fsmga, aircraft_state)
-
-    # Autopilot
-    led_update_ap(fsmga, aircraft_state.get("AUTOPILOT_MASTER"))
-
-    # Heading mode
-    led_update_hdg(fsmga, aircraft_state.get("AUTOPILOT_HEADING_LOCK"))
-
-    # TODO
-    # led_update_trk
-
-    # Nav mode
-    led_update_nav(fsmga, aircraft_state.get("AUTOPILOT_HEADING_LOCK"))
-
-    # Approach mode
-    led_update_apr(fsmga, aircraft_state.get("AUTOPILOT_APPROACH_ACTIVE"))
 
 
 def run_simconnect():
@@ -274,7 +263,7 @@ def run_simconnect():
     fsmga.all_leds_off()
 
     # Mark all LEDs and known to be off
-    for led_id in fsmga.LOOKUP_LED_BY_ID:
+    for led_id in LOOKUP_LED_BY_ID:
         KNOWN_LED_STATE[led_id] = 0
 
     print("Starting SimConnect")
